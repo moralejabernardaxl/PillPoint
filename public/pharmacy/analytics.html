@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Analytics — PillPoint</title>
+<link rel="icon" type="image/svg+xml" href="/img/logo-mark.svg" />
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+<script src="/js/api.js"></script>
+<script src="/js/layout.js"></script>
+<script>
+(async function () {
+  const user = await guardPage(['pharmacy_staff'], 'Analytics', 'Reservation trends for your pharmacy');
+  if (!user) return;
+  const content = document.getElementById('page-content');
+  content.innerHTML = `<div class="empty-state">Loading...</div>`;
+  try {
+    const data = await Api.get('/api/pharmacy/analytics');
+    const counts = {};
+    data.byStatus.forEach(s => counts[s.status] = s.count);
+    const deployedCounts = {};
+    data.deployedVsNot.forEach(d => deployedCounts[d.deployed] = d.count);
+
+    const maxRevenue = Math.max(1, ...data.monthlyRevenue.map(m => m.revenue || 0));
+
+    content.innerHTML = `
+      <div class="grid grid-4">
+        <div class="card stat-card"><div class="stat-label">Pending</div><div class="stat-value">${counts.pending || 0}</div></div>
+        <div class="card stat-card"><div class="stat-label">Confirmed</div><div class="stat-value">${counts.confirmed || 0}</div></div>
+        <div class="card stat-card"><div class="stat-label">Completed</div><div class="stat-value">${counts.completed || 0}</div></div>
+        <div class="card stat-card"><div class="stat-label">Cancelled</div><div class="stat-value">${counts.cancelled || 0}</div></div>
+      </div>
+
+      <div class="grid mt-24" style="grid-template-columns: 1fr 1fr; gap:18px;">
+        <div class="card">
+          <div class="card-title">Inventory by Category</div>
+          ${data.inventoryByCategory.length
+            ? pieChart3D(data.inventoryByCategory.map(c => ({ label: c.category, value: c.count })))
+            : `<div class="empty-state" style="padding:24px;"><p class="text-sm">No inventory yet.</p></div>`}
+        </div>
+        <div class="card">
+          <div class="card-title">Deployed vs Not Deployed</div>
+          ${pieChartSvg([
+            { label: 'Deployed', value: deployedCounts[1] || 0, color: '#14B8A6' },
+            { label: 'Not Deployed', value: deployedCounts[0] || 0, color: '#CBD5E1' },
+          ], { donut: true })}
+        </div>
+      </div>
+
+      <div class="section-title">Reservation Statistics <span class="text-sm muted" style="font-weight:400;">(Mon–Sun, last 8 weeks)</span></div>
+      <div class="card">${weekdayBarChart(data.reservationStats.labels, data.reservationStats.counts)}</div>
+
+      <div class="section-title">Revenue Trend <span class="text-sm muted" style="font-weight:400;">(completed reservations, last 6 months)</span></div>
+      <div class="card">
+        ${data.monthlyRevenue.length ? `
+          <div class="weekday-chart" style="height:140px;">
+            ${data.monthlyRevenue.map(m => `
+              <div class="weekday-col">
+                <div class="weekday-count">${money(m.revenue || 0)}</div>
+                <div class="weekday-bar" style="height:${Math.max(4, Math.round(((m.revenue || 0) / maxRevenue) * 100))}%;"></div>
+                <div class="weekday-label">${m.ym}</div>
+              </div>
+            `).join('')}
+          </div>
+        ` : `<div class="empty-state"><h3>No completed sales yet</h3><p>Revenue trend appears once reservations are marked picked up.</p></div>`}
+      </div>
+
+      <div class="section-title">Top Reserved Medicines</div>
+      <div class="card">
+        ${data.topMedicines.length ? `
+          <table>
+            <thead><tr><th>Medicine</th><th>Units Reserved</th></tr></thead>
+            <tbody>${data.topMedicines.map(m => `<tr><td>${escapeHtml(m.name)}</td><td>${m.total_reserved}</td></tr>`).join('')}</tbody>
+          </table>
+        ` : `<div class="empty-state"><h3>No data yet</h3><p>Once reservations are confirmed or completed, trends will show here.</p></div>`}
+      </div>
+    `;
+  } catch (err) {
+    content.innerHTML = `<div class="alert alert-error">${escapeHtml(err.message)}</div>`;
+  }
+})();
+</script>
+</body>
+</html>

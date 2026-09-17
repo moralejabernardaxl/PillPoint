@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Register — PillPoint</title>
+<link rel="icon" type="image/svg+xml" href="/img/logo-mark.svg" />
+<link rel="stylesheet" href="/css/style.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card card card-elevated" id="auth-card" style="max-width:460px;">
+    <div class="brand">
+      <img src="/img/logo-mark.svg" alt="PillPoint" width="34" height="34" style="border-radius:9px;" />
+      <div style="font-weight:800;font-size:19px;color:var(--navy)">Create your account</div>
+    </div>
+    <p class="text-sm muted" style="text-align:center;margin-bottom:16px;">
+      Self-registration is for customers and pharmacies only. Admin accounts are provisioned separately and can't be created here.
+    </p>
+
+    <div id="alert-box"></div>
+
+    <div class="account-type-select" id="account-type">
+      <button type="button" class="account-type-card active" data-role="customer">
+        <span class="icon">&#128100;</span>
+        <span class="title">Customer</span>
+        <span class="sub">Search & reserve medicine</span>
+      </button>
+      <button type="button" class="account-type-card" data-role="pharmacy_staff">
+        <span class="icon">&#127974;</span>
+        <span class="title">Pharmacy</span>
+        <span class="sub">List inventory & fulfill reservations</span>
+      </button>
+    </div>
+
+    <form id="register-form">
+      <div class="field">
+        <label>Full Name</label>
+        <input type="text" id="name" required />
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="email" required autocomplete="username" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <div class="password-field">
+          <input type="password" id="password" minlength="6" required autocomplete="new-password" />
+          <button type="button" class="password-toggle" id="password-toggle" aria-label="Show password">&#128065;</button>
+        </div>
+      </div>
+
+      <div id="pharmacy-fields" style="display:none;">
+        <div class="divider" style="margin:18px 0;"></div>
+        <div class="section-title" style="margin-top:0;">Pharmacy Details</div>
+        <div class="field">
+          <label>Pharmacy Name</label>
+          <input type="text" id="pharmacy_name" />
+        </div>
+        <div class="field">
+          <label>Address</label>
+          <input type="text" id="pharmacy_address" placeholder="Street, City" />
+        </div>
+        <div class="field">
+          <label>Phone (optional)</label>
+          <input type="text" id="pharmacy_phone" />
+        </div>
+        <div class="field">
+          <label>Pharmacy Location <span class="muted text-sm">(click the map to place a pin)</span></label>
+          <div class="map-placeholder" style="height:220px;">
+            <div id="picker-map"></div>
+          </div>
+          <p class="text-sm muted mt-8" id="picker-coords">No location set yet.</p>
+        </div>
+        <div class="field">
+          <label>Store Photo <span class="muted text-sm">(optional — shown to customers)</span></label>
+          <div class="photo-upload-box" id="photo-upload-box">
+            <div id="photo-upload-empty">
+              <div style="font-size:26px;">&#128247;</div>
+              <div class="text-sm muted mt-8">Click to upload a photo of your storefront</div>
+            </div>
+            <div id="photo-upload-filled" style="display:none;">
+              <img id="photo-preview" class="photo-preview" />
+              <button type="button" class="btn btn-outline btn-sm" id="photo-remove-btn">Remove Photo</button>
+            </div>
+          </div>
+          <input type="file" id="store_image_input" accept="image/png,image/jpeg,image/webp" style="display:none;" />
+        </div>
+        <div class="field">
+          <label>Short Description <span class="muted text-sm">(optional)</span></label>
+          <textarea id="pharmacy_description" rows="2" placeholder="What makes your pharmacy stand out?"></textarea>
+        </div>
+        <div class="field">
+          <label>Operating Hours <span class="muted text-sm">(optional)</span></label>
+          <input type="text" id="pharmacy_hours" placeholder="e.g. Mon–Sat: 8AM–9PM" />
+        </div>
+        <div class="alert alert-info text-sm">Your pharmacy will be listed as <strong>unverified</strong> until an admin reviews and approves it.</div>
+      </div>
+
+      <button class="btn btn-primary btn-block mt-16" type="submit">Create Account</button>
+    </form>
+
+    <div class="auth-foot">
+      Already have an account? <a href="/login.html" style="color:var(--teal-dark);font-weight:600">Login</a>
+    </div>
+  </div>
+</div>
+
+<script src="/js/api.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+let selectedRole = 'customer';
+let pickedLat = null, pickedLng = null;
+let pickerMap, pickerMarker;
+
+document.getElementById('account-type').addEventListener('click', (e) => {
+  const btn = e.target.closest('.account-type-card');
+  if (!btn) return;
+  document.querySelectorAll('.account-type-card').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  selectedRole = btn.dataset.role;
+
+  const pharmacyFields = document.getElementById('pharmacy-fields');
+  if (selectedRole === 'pharmacy_staff') {
+    pharmacyFields.style.display = 'block';
+    document.getElementById('pharmacy_name').required = true;
+    document.getElementById('pharmacy_address').required = true;
+    if (!pickerMap) initPickerMap();
+    setTimeout(() => pickerMap && pickerMap.invalidateSize(), 50);
+  } else {
+    pharmacyFields.style.display = 'none';
+    document.getElementById('pharmacy_name').required = false;
+    document.getElementById('pharmacy_address').required = false;
+  }
+});
+
+function initPickerMap() {
+  pickerMap = L.map('picker-map').setView([8.9475, 125.5406], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(pickerMap);
+
+  pickerMap.on('click', (e) => {
+    pickedLat = e.latlng.lat;
+    pickedLng = e.latlng.lng;
+    if (pickerMarker) pickerMap.removeLayer(pickerMarker);
+    pickerMarker = L.marker([pickedLat, pickedLng]).addTo(pickerMap);
+    document.getElementById('picker-coords').textContent =
+      `Pin set at ${pickedLat.toFixed(5)}, ${pickedLng.toFixed(5)}`;
+  });
+}
+
+const passwordInput = document.getElementById('password');
+document.getElementById('password-toggle').addEventListener('click', function () {
+  const isHidden = passwordInput.type === 'password';
+  passwordInput.type = isHidden ? 'text' : 'password';
+  this.innerHTML = isHidden ? '&#128064;' : '&#128065;';
+});
+
+// ---- Store photo upload (stored as a base64 data URI — no server upload folder needed) ----
+let storeImageData = null;
+const storeImageInput = document.getElementById('store_image_input');
+document.getElementById('photo-upload-box').addEventListener('click', (e) => {
+  if (e.target.id === 'photo-remove-btn') return;
+  storeImageInput.click();
+});
+storeImageInput.addEventListener('change', () => {
+  const file = storeImageInput.files[0];
+  if (!file) return;
+  if (file.size > 4 * 1024 * 1024) {
+    toast('Please choose an image under 4MB.', 'error');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    storeImageData = reader.result;
+    document.getElementById('photo-preview').src = storeImageData;
+    document.getElementById('photo-upload-empty').style.display = 'none';
+    document.getElementById('photo-upload-filled').style.display = 'block';
+  };
+  reader.readAsDataURL(file);
+});
+document.getElementById('photo-remove-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  storeImageData = null;
+  storeImageInput.value = '';
+  document.getElementById('photo-upload-empty').style.display = 'block';
+  document.getElementById('photo-upload-filled').style.display = 'none';
+});
+
+document.getElementById('register-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const alertBox = document.getElementById('alert-box');
+  alertBox.innerHTML = '';
+
+  const payload = {
+    name: document.getElementById('name').value.trim(),
+    email: document.getElementById('email').value.trim(),
+    password: passwordInput.value,
+    role: selectedRole,
+  };
+
+  if (selectedRole === 'pharmacy_staff') {
+    payload.pharmacy_name = document.getElementById('pharmacy_name').value.trim();
+    payload.pharmacy_address = document.getElementById('pharmacy_address').value.trim();
+    payload.pharmacy_phone = document.getElementById('pharmacy_phone').value.trim();
+    payload.description = document.getElementById('pharmacy_description').value.trim();
+    payload.hours = document.getElementById('pharmacy_hours').value.trim();
+    if (storeImageData) payload.store_image = storeImageData;
+    if (pickedLat == null || pickedLng == null) {
+      alertBox.innerHTML = `<div class="alert alert-error">Please click the map to set your pharmacy's location.</div>`;
+      return;
+    }
+    payload.latitude = pickedLat;
+    payload.longitude = pickedLng;
+  }
+
+  try {
+    const { user } = await Api.post('/api/auth/register', payload);
+    window.location.href = user.role === 'pharmacy_staff' ? '/pharmacy/dashboard.html' : '/dashboard.html';
+  } catch (err) {
+    alertBox.innerHTML = `<div class="alert alert-error">${escapeHtml(err.message)}</div>`;
+  }
+});
+</script>
+</body>
+</html>

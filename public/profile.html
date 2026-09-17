@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Profile — PillPoint</title>
+<link rel="icon" type="image/svg+xml" href="/img/logo-mark.svg" />
+<link rel="stylesheet" href="/css/style.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+<script src="/js/api.js"></script>
+<script src="/js/layout.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(async function () {
+  const user = await guardPage(null, 'Profile', 'Your account information');
+  if (!user) return;
+  const content = document.getElementById('page-content');
+
+  if (user.role === 'pharmacy_staff') {
+    await renderPharmacyProfile();
+  } else {
+    renderBasicProfile(user);
+  }
+
+  function renderBasicProfile(u) {
+    content.innerHTML = `
+      <div class="profile-wrap">
+        <div class="card card-elevated">
+          <div class="field">
+            <label>Name</label>
+            <input id="name-input" value="${escapeHtml(u.name)}" />
+          </div>
+          <div class="field"><label>Email</label><input value="${escapeHtml(u.email)}" disabled></div>
+          <div class="field"><label>Role</label><input value="${escapeHtml(u.role.replace('_',' '))}" disabled></div>
+          <button class="btn btn-primary" id="save-btn">Save Changes</button>
+          <p class="text-sm muted mt-16">Email and role can't be changed here — contact your admin if those need to change.</p>
+        </div>
+      </div>
+    `;
+    document.getElementById('save-btn').addEventListener('click', async () => {
+      const newName = document.getElementById('name-input').value.trim();
+      if (!newName) { toast('Name cannot be empty.', 'error'); return; }
+      try {
+        const res = await Api.put('/api/auth/profile', { name: newName });
+        toast('Profile updated.');
+        const nameEl = document.querySelector('.user-box .user-name');
+        if (nameEl) nameEl.textContent = res.user.name;
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  }
+
+  async function renderPharmacyProfile() {
+    content.innerHTML = `<div class="empty-state">Loading...</div>`;
+    let data;
+    try {
+      data = await Api.get('/api/pharmacy/profile');
+    } catch (err) {
+      content.innerHTML = `<div class="alert alert-error">${escapeHtml(err.message)}</div>`;
+      return;
+    }
+    const p = data.pharmacy;
+    let pickedLat = p.latitude, pickedLng = p.longitude;
+    let storeImageData = p.store_image || null;
+
+    content.innerHTML = `
+      <div class="profile-wrap">
+        <div class="card card-elevated" style="max-width:560px;padding:0;overflow:hidden;">
+          ${storeImageData
+            ? `<img src="${storeImageData}" class="store-photo" id="current-store-photo" />`
+            : `<div class="store-photo-placeholder">&#127974;</div>`}
+          <div style="padding:24px;">
+          <div class="card-title" style="margin-top:0;">Pharmacy Information</div>
+          <div class="profile-readonly-row"><span class="k">Pharmacy Name</span><span class="v">${escapeHtml(p.name)}</span></div>
+          <div class="profile-readonly-row"><span class="k">Status</span><span class="v">${p.verified ? '<span class="badge badge-verified">Verified</span>' : '<span class="badge badge-unverified">Pending verification</span>'}</span></div>
+          <div class="profile-readonly-row"><span class="k">Registered</span><span class="v">${new Date(p.created_at).toLocaleDateString()}</span></div>
+
+          <div class="divider mt-16" style="margin-bottom:16px;"></div>
+
+          <div class="field">
+            <label>Store Photo <span class="muted text-sm">(editable)</span></label>
+            <div class="photo-upload-box" id="photo-upload-box">
+              <div id="photo-upload-empty" style="display:${storeImageData ? 'none' : 'block'};">
+                <div style="font-size:26px;">&#128247;</div>
+                <div class="text-sm muted mt-8">Click to upload a photo of your storefront</div>
+              </div>
+              <div id="photo-upload-filled" style="display:${storeImageData ? 'block' : 'none'};">
+                <img id="photo-preview" class="photo-preview" src="${storeImageData || ''}" />
+                <button type="button" class="btn btn-outline btn-sm" id="photo-remove-btn">Remove Photo</button>
+              </div>
+            </div>
+            <input type="file" id="store_image_input" accept="image/png,image/jpeg,image/webp" style="display:none;" />
+          </div>
+          <div class="field">
+            <label>Description <span class="muted text-sm">(editable)</span></label>
+            <textarea id="description-input" rows="2">${escapeHtml(p.description || '')}</textarea>
+          </div>
+          <div class="field">
+            <label>Operating Hours <span class="muted text-sm">(editable)</span></label>
+            <input id="hours-input" value="${escapeHtml(p.hours || '')}" placeholder="e.g. Mon–Sat: 8AM–9PM" />
+          </div>
+
+          <div class="field">
+            <label>Username <span class="muted text-sm">(editable)</span></label>
+            <input id="name-input" value="${escapeHtml(user.name)}" />
+          </div>
+          <div class="field"><label>Email</label><input value="${escapeHtml(user.email)}" disabled></div>
+          <div class="field">
+            <label>Phone Number <span class="muted text-sm">(editable)</span></label>
+            <input id="phone-input" value="${escapeHtml(p.phone || '')}" />
+          </div>
+          <div class="field">
+            <label>Location <span class="muted text-sm">(editable — click the map to update your pin)</span></label>
+            <div class="map-placeholder" style="height:220px;">
+              <div id="picker-map"></div>
+            </div>
+            <p class="text-sm muted mt-8" id="picker-coords">Current: ${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}</p>
+          </div>
+
+          <button class="btn btn-primary" id="save-btn">Save Changes</button>
+          <p class="text-sm muted mt-16">Store photo, description, hours, username, phone number, and location can be edited here. Pharmacy name and verification status are managed by the admin team.</p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const storeImageInput = document.getElementById('store_image_input');
+    document.getElementById('photo-upload-box').addEventListener('click', (e) => {
+      if (e.target.id === 'photo-remove-btn') return;
+      storeImageInput.click();
+    });
+    storeImageInput.addEventListener('change', () => {
+      const file = storeImageInput.files[0];
+      if (!file) return;
+      if (file.size > 4 * 1024 * 1024) { toast('Please choose an image under 4MB.', 'error'); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        storeImageData = reader.result;
+        document.getElementById('photo-preview').src = storeImageData;
+        document.getElementById('photo-upload-empty').style.display = 'none';
+        document.getElementById('photo-upload-filled').style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+    });
+    document.getElementById('photo-remove-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      storeImageData = null;
+      storeImageInput.value = '';
+      document.getElementById('photo-upload-empty').style.display = 'block';
+      document.getElementById('photo-upload-filled').style.display = 'none';
+    });
+
+    const map = L.map('picker-map').setView([p.latitude, p.longitude], 14);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+    let marker = L.marker([p.latitude, p.longitude]).addTo(map);
+    setTimeout(() => map.invalidateSize(), 50);
+
+    map.on('click', (e) => {
+      pickedLat = e.latlng.lat;
+      pickedLng = e.latlng.lng;
+      map.removeLayer(marker);
+      marker = L.marker([pickedLat, pickedLng]).addTo(map);
+      document.getElementById('picker-coords').textContent = `Pin set at ${pickedLat.toFixed(5)}, ${pickedLng.toFixed(5)}`;
+    });
+
+    document.getElementById('save-btn').addEventListener('click', async () => {
+      const newName = document.getElementById('name-input').value.trim();
+      if (!newName) { toast('Username cannot be empty.', 'error'); return; }
+      try {
+        const res = await Api.put('/api/pharmacy/profile', {
+          name: newName,
+          phone: document.getElementById('phone-input').value.trim(),
+          latitude: pickedLat,
+          longitude: pickedLng,
+          store_image: storeImageData,
+          description: document.getElementById('description-input').value.trim(),
+          hours: document.getElementById('hours-input').value.trim(),
+        });
+        toast('Profile updated.');
+        const nameEl = document.querySelector('.user-box .user-name');
+        if (nameEl) nameEl.textContent = res.user.name;
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Pharmacy Profile — PillPoint</title>
+<link rel="icon" type="image/svg+xml" href="/img/logo-mark.svg" />
+<link rel="stylesheet" href="/css/style.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+</head>
+<body>
+<script src="/js/api.js"></script>
+<script src="/js/layout.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(async function () {
+  const user = await guardPage(['customer'], 'Pharmacy Profile', 'Everything currently available at this pharmacy');
+  if (!user) return;
+  const content = document.getElementById('page-content');
+
+  const id = new URLSearchParams(location.search).get('id');
+  if (!id) {
+    content.innerHTML = `<div class="alert alert-error">No pharmacy specified.</div>`;
+    return;
+  }
+
+  content.innerHTML = `<div class="empty-state">Loading pharmacy profile...</div>`;
+
+  function loadWithLocation() {
+    return new Promise((resolve) => {
+      if (!navigator.geolocation) return resolve({});
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        () => resolve({}),
+        { timeout: 3000 }
+      );
+    });
+  }
+
+  const loc = await loadWithLocation();
+  let data;
+  try {
+    const params = new URLSearchParams();
+    if (loc.lat != null) { params.set('lat', loc.lat); params.set('lng', loc.lng); }
+    data = await Api.get(`/api/customer/pharmacies/${id}?` + params.toString());
+  } catch (err) {
+    content.innerHTML = `<div class="alert alert-error">${escapeHtml(err.message)}</div>`;
+    return;
+  }
+
+  const p = data.pharmacy;
+  content.innerHTML = `
+    <div class="card fade-in-up" style="padding:0;overflow:hidden;">
+      ${p.store_image
+        ? `<img src="${p.store_image}" class="store-photo" alt="${escapeHtml(p.name)} storefront" />`
+        : `<div class="store-photo-placeholder">&#127974;</div>`}
+      <div style="padding:20px;">
+        <div class="flex justify-between items-center" style="flex-wrap:wrap;gap:10px;">
+          <h2 style="margin:0;">${escapeHtml(p.name)}</h2>
+          ${p.verified ? '<span class="badge badge-verified">Verified</span>' : '<span class="badge badge-unverified">Pending verification</span>'}
+        </div>
+        ${p.description ? `<p class="text-sm muted mt-8">${escapeHtml(p.description)}</p>` : ''}
+        <div class="grid grid-2 mt-16" style="gap:10px;">
+          <div class="text-sm"><strong>Address:</strong> ${escapeHtml(p.address)}</div>
+          ${p.phone ? `<div class="text-sm"><strong>Phone:</strong> ${escapeHtml(p.phone)}</div>` : ''}
+          ${p.hours ? `<div class="text-sm"><strong>Hours:</strong> ${escapeHtml(p.hours)}</div>` : ''}
+          ${p.distance_km != null ? `<div class="text-sm" style="font-weight:700;color:var(--teal-dark);">${p.distance_km} km away</div>` : ''}
+        </div>
+      </div>
+    </div>
+
+    <div class="card mt-16">
+      <div class="map-placeholder" style="height:260px;"><div id="profile-map"></div></div>
+    </div>
+
+    <div class="section-title">Currently Selling Products</div>
+    <div class="card">
+      <div class="field"><label>Search products at this pharmacy</label><input type="text" id="product-filter" placeholder="e.g. Paracetamol" /></div>
+      <div id="products"></div>
+    </div>
+  `;
+
+  const map = L.map('profile-map').setView([p.latitude, p.longitude], 15);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+  L.marker([p.latitude, p.longitude]).addTo(map).bindPopup(`<b>${escapeHtml(p.name)}</b>`);
+  setTimeout(() => map.invalidateSize(), 50);
+
+  const productsBox = document.getElementById('products');
+  function renderProducts(filter) {
+    const f = (filter || '').toLowerCase();
+    const rows = data.products.filter(pr => pr.medicine_name.toLowerCase().includes(f));
+    if (!rows.length) {
+      productsBox.innerHTML = `<div class="empty-state"><div class="icon">&#128137;</div><h3>No products found</h3><p>This pharmacy hasn't deployed any matching products yet.</p></div>`;
+      return;
+    }
+    productsBox.innerHTML = `
+      <table>
+        <thead><tr><th>Medicine</th><th>Brand</th><th>Price</th><th>Stock</th><th></th></tr></thead>
+        <tbody>
+          ${rows.map(pr => `
+            <tr>
+              <td>
+                <div style="font-weight:600">${escapeHtml(pr.medicine_name)}</div>
+                <div class="text-sm muted">${escapeHtml(pr.category || '')}</div>
+              </td>
+              <td class="text-sm muted">${escapeHtml(pr.brand || '—')}</td>
+              <td>${money(pr.price)}</td>
+              <td>${stockBadge(pr.stock_quantity, 10)}</td>
+              <td>
+                <button class="btn btn-primary btn-sm reserve-btn" data-id="${pr.inventory_id}" data-name="${escapeHtml(pr.medicine_name)}" data-max="${pr.stock_quantity}" ${pr.stock_quantity === 0 ? 'disabled' : ''}>Reserve</button>
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+    document.querySelectorAll('.reserve-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const qtyStr = prompt(`Reserve how many units of "${btn.dataset.name}"? (max ${btn.dataset.max} available)`, '1');
+        if (qtyStr === null) return;
+        const qty = parseInt(qtyStr, 10);
+        if (!qty || qty < 1 || qty > parseInt(btn.dataset.max, 10)) { toast('Please enter a valid quantity.', 'error'); return; }
+        try {
+          await Api.post('/api/customer/reservations', { inventory_id: btn.dataset.id, quantity: qty });
+          toast('Reservation placed! Check "My Reservations" for status.');
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    });
+  }
+  renderProducts('');
+  let t;
+  document.getElementById('product-filter').addEventListener('input', (e) => {
+    clearTimeout(t);
+    t = setTimeout(() => renderProducts(e.target.value), 200);
+  });
+})();
+</script>
+</body>
+</html>
